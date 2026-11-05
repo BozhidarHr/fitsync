@@ -1,0 +1,46 @@
+name: FitSync
+options:
+  bundleIdPrefix: com.fitsyncapp
+  deploymentTarget:
+    iOS: "17.0"
+configFiles:
+  Debug: Config.xcconfig
+  Release: Config.xcconfig
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    SWIFT_STRICT_CONCURRENCY: minimal
+targets:
+  FitSync:
+    type: application
+    platform: iOS
+    sources: [FitSync]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(APP_BUNDLE_ID)
+        TARGETED_DEVICE_FAMILY: "1"
+    entitlements:
+      path: FitSync/FitSync.entitlements
+      properties:
+        com.apple.developer.healthkit: true
+    info:
+      path: FitSync/Info.plist
+      properties:
+        CFBundleDisplayName: FitSync
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        NSHealthShareUsageDescription: FitSync reads the samples it wrote so it can update or remove them without creating duplicates.
+        NSHealthUpdateUsageDescription: FitSync writes your Fitbit workouts, active energy, steps, heart rate and sleep from Google Health into Apple Health.
+        UIBackgroundModes: [fetch]
+        BGTaskSchedulerPermittedIdentifiers: [$(APP_BUNDLE_ID).refresh]
+        GoogleClientID: $(GOOGLE_CLIENT_ID)
+        GoogleRedirectScheme: $(GOOGLE_REDIRECT_SCHEME)
+  FitSyncTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [FitSyncTests]
+    dependencies:
+      - target: FitSync
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES

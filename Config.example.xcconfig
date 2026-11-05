@@ -1,0 +1,13 @@
+// FitSync build configuration.
+// 1. In Google Cloud console create an OAuth client of type "iOS" with the bundle id below.
+// 2. Paste its client id here. The redirect scheme is the client id reversed
+//    (Google shows it as "iOS URL scheme"), e.g. com.googleusercontent.apps.1234-abcd
+// Note: in .xcconfig files "//" starts a comment, so never put a URL with "//" in a value.
+
+APP_BUNDLE_ID = com.example.fitsync
+GOOGLE_CLIENT_ID = REPLACE_ME.apps.googleusercontent.com
+GOOGLE_REDIRECT_SCHEME = com.googleusercontent.apps.REPLACE_ME
+
+// Your Apple team id (Xcode > Settings > Accounts). Can also be set in Signing & Capabilities.
+DEVELOPMENT_TEAM =
+CODE_SIGN_STYLE = Automatic
