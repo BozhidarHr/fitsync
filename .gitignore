@@ -18,5 +18,9 @@ build/
 .idea/
 .vscode/
 
+# SourceKit-LSP / xcode-build-server (machine-specific paths)
+buildServer.json
+.sourcekit-lsp/
+
 # macOS
 .DS_Store

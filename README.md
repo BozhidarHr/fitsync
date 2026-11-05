@@ -49,15 +49,6 @@ FitSync/
   UI/         ContentView
 ```
 
-## Known unknowns — check on first run
-
-This was written without a Mac, so it has not been compiled yet; expect a few small fixes in Xcode.
-
-- **Filter field names**: filters use the data type name in snake_case (`active_energy_burned.interval.start_time`, `heart_rate.sample_time.physical_time`); the URL path uses kebab-case. Using camelCase or kebab-case in a filter returns HTTP 400 `INVALID_DATA_POINT_FILTER`.
-- **Active energy granularity**: confirm `active-energy-burned` supports `list` for your account. If it only supports roll-ups, switch that type to `dataPoints:rollUp` with 1-minute or 15-minute windows and build sync ids from the window start (`gh:active-energy:<start>`).
-- **exerciseType values**: not fully documented; `HealthKitWriter.activityType` matches by keyword and falls back to `.other`.
-- Background writes fail while the phone is locked (HealthKit data protection). The next sync picks them up.
-
 ## Roadmap
 
 - v1.1: resting heart rate, weight, all-day distance (attach in-workout distance the same way as energy).
