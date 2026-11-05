@@ -24,6 +24,7 @@ Synced in v1: workouts (with active calories attached so they count toward the M
 5. In the **Google Health app**, turn off Apple Health sharing for workouts, activity, heart rate and sleep. Otherwise Apple Health shows each workout twice (it merges duplicate step/calorie totals by source priority, but not workouts).
 
 A free Apple ID works, but the app must be re-installed from Xcode every 7 days. A paid developer account removes that.
+To automate it, pair the iPhone with "Connect via network" in Xcode and run `scripts/auto-resign.sh install`: a launchd agent checks every 4 hours and rebuilds and reinstalls over Wi-Fi once a day (log: `~/Library/Logs/FitSync-resign.log`).
 
 ## How duplicates are prevented
 
