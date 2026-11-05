@@ -14,8 +14,15 @@ final class DedupTests: XCTestCase {
         json(#"{"name":"users/me/dataTypes/active-energy-burned/dataPoints/\#(id)","activeEnergyBurned":{"interval":{"startTime":"\#(start)","endTime":"\#(end)"},"kcal":\#(kcal)}}"#)
     }
 
-    private func exercise(_ id: String, _ start: String, _ end: String, kcal: Double = 300) -> DataPoint {
-        json(#"{"name":"users/me/dataTypes/exercise/dataPoints/\#(id)","exercise":{"interval":{"startTime":"\#(start)","endTime":"\#(end)"},"exerciseType":"RUNNING","metricsSummary":{"caloriesKcal":\#(kcal),"distanceMillimeters":"5000000"}}}"#)
+    /// Fitbit's derived per-minute energy: no `name`, only a data source.
+    private func unnamedEnergy(_ start: String, _ end: String, _ kcal: Double, platform: String = "FITBIT") -> DataPoint {
+        json(#"{"dataSource":{"platform":"\#(platform)"},"activeEnergyBurned":{"interval":{"startTime":"\#(start)","endTime":"\#(end)"},"kcal":\#(kcal)}}"#)
+    }
+
+    private func exercise(_ id: String, _ start: String, _ end: String, kcal: Double? = 300,
+                          platform: String = "FITBIT") -> DataPoint {
+        let calories = kcal.map { #""caloriesKcal":\#($0),"# } ?? ""
+        return json(#"{"name":"users/me/dataTypes/exercise/dataPoints/\#(id)","dataSource":{"platform":"\#(platform)"},"exercise":{"interval":{"startTime":"\#(start)","endTime":"\#(end)"},"exerciseType":"RUNNING","metricsSummary":{\#(calories)"distanceMillimeters":"5000000"}}}"#)
     }
 
     private func ledger(from records: [Record]) -> [String: LedgerState] {
@@ -43,7 +50,7 @@ final class DedupTests: XCTestCase {
         XCTAssertEqual(secondPlan.unchangedCount, second.count)
     }
 
-    func testWorkoutCaloriesAreNotCountedTwice() {
+    func testWorkoutSummaryCaloriesWinOverSamples() {
         var data = FetchedData()
         data.exercises = [exercise("run1", "2026-11-05T07:00:00Z", "2026-11-05T07:30:00Z", kcal: 300)]
         data.activeEnergy = [
@@ -53,12 +60,42 @@ final class DedupTests: XCTestCase {
         let records = Planner.plan(data)
         let plan = ChangeDetector.plan(records, ledger: [:])
 
-        // The in-workout sample is a child of the workout, not standalone.
         XCTAssertEqual(plan.standalone.map(\.syncId), ["gh:active-energy:outside"])
-        let children = plan.workouts.first!.children.map(\.syncId)
-        XCTAssertTrue(children.contains("gh:active-energy:inside"))
-        // The summary kcal fallback is NOT used when fine-grained samples exist.
-        XCTAssertFalse(records.contains { $0.syncId == "gh:exercise-kcal:run1" })
+        // The in-workout sample is dropped, so the workout's calories count once.
+        XCTAssertFalse(records.contains { $0.syncId == "gh:active-energy:inside" })
+        let children = plan.workouts.first!.children
+        XCTAssertEqual(children.map(\.syncId).filter { $0.contains("kcal") || $0.contains("energy") },
+                       ["gh:exercise-kcal:run1"])
+        XCTAssertEqual(children.first { $0.syncId == "gh:exercise-kcal:run1" }?.payload, .quantity(.activeEnergy, 300))
+    }
+
+    func testSamplesAttachedWhenWorkoutHasNoSummaryCalories() {
+        var data = FetchedData()
+        data.exercises = [exercise("run1", "2026-11-05T07:00:00Z", "2026-11-05T07:30:00Z", kcal: nil)]
+        data.activeEnergy = [energy("inside", "2026-11-05T07:10:00Z", "2026-11-05T07:11:00Z", 12)]
+        let plan = ChangeDetector.plan(Planner.plan(data), ledger: [:])
+
+        XCTAssertTrue(plan.standalone.isEmpty)
+        XCTAssertTrue(plan.workouts.first!.children.map(\.syncId).contains("gh:active-energy:inside"))
+    }
+
+    func testUnnamedPointsGetDistinctStableIds() {
+        var data = FetchedData()
+        data.activeEnergy = [
+            unnamedEnergy("2026-11-05T06:00:00Z", "2026-11-05T06:01:00Z", 2),
+            unnamedEnergy("2026-11-05T06:01:00Z", "2026-11-05T06:02:00Z", 3),
+        ]
+        let records = Planner.plan(data)
+        XCTAssertEqual(records.map(\.syncId), ["gh:active-energy:fitbit-1793858400000",
+                                               "gh:active-energy:fitbit-1793858460000"])
+        XCTAssertEqual(records, Planner.plan(data), "Ids are stable across syncs")
+    }
+
+    func testPointsImportedFromAppleHealthAreSkipped() {
+        var data = FetchedData()
+        data.exercises = [exercise("echo", "2026-11-05T07:00:00Z", "2026-11-05T07:30:00Z", kcal: nil, platform: "HEALTH_KIT")]
+        data.activeEnergy = [unnamedEnergy("2026-11-05T06:00:00Z", "2026-11-05T06:10:00Z", 12, platform: "HEALTH_KIT")]
+        XCTAssertTrue(Planner.plan(data).isEmpty)
     }
 
     func testSummaryCaloriesUsedWhenNoSamples() {

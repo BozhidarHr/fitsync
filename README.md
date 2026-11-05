@@ -33,7 +33,8 @@ A free Apple ID works, but the app must be re-installed from Xcode every 7 days.
 | Ledger (SwiftData) | Remembers a SHA-256 of each record written; unchanged records are skipped, so repeat syncs write nothing. |
 | One `SyncEngine` actor | Button, app launch and background refresh all call `engine.sync()`. A second call while a sync runs joins it instead of starting another. |
 | Orphan cleanup | After a fully successful fetch, FitSync deletes its own samples in the window whose id Google no longer returns (deleted or replaced in Google Health). Never touches other apps' data. |
-| Calories counted once | Active-energy samples inside a workout are attached to that workout, not written again on their own. The workout's summary calories are used only when no per-minute samples exist. |
+| Calories counted once | A workout gets its own summary calories (`caloriesKcal`) and the per-minute active-energy samples inside it are skipped. Only when a workout has no summary calories are those samples attached to it instead. |
+| Apple Health data skipped | Points that Google Health imported from Apple Health (`dataSource.platform = HEALTH_KIT`) are ignored, so iPhone data and FitSync's own workouts are never copied back. |
 
 The planning and dedup logic is pure Swift and covered by `FitSyncTests/DedupTests.swift`.
 

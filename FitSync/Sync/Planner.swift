@@ -18,16 +18,36 @@ struct FetchedData: Sendable {
         case .sleep: sleep = points
         }
     }
+
+    func points(_ type: GHDataType) -> [DataPoint] {
+        switch type {
+        case .exercise: return exercises
+        case .activeEnergyBurned: return activeEnergy
+        case .steps: return steps
+        case .heartRate: return heartRate
+        case .sleep: return sleep
+        }
+    }
 }
 
 /// Turns Google data points into the exact set of records that should exist in Apple Health.
 /// Same input → same output (same sync ids, same hashes), which is what makes syncing idempotent.
 enum Planner {
-    static func plan(_ data: FetchedData) -> [Record] {
+    static func plan(_ fetched: FetchedData) -> [Record] {
+        // Points Google Health imported from Apple Health are already there (often
+        // including FitSync's own workouts); copying them back would duplicate them.
+        var data = fetched
+        for type in GHDataType.allCases {
+            data.set(type, fetched.points(type).filter { !$0.isFromHealthKit })
+        }
         var out: [Record] = []
 
         // 1. Workouts define windows that active energy is attached to.
-        struct Window { let syncId: String; let start: Date; let end: Date; let pointId: String; let exercise: Exercise }
+        struct Window {
+            let syncId: String; let start: Date; let end: Date; let pointId: String; let exercise: Exercise
+            /// The workout's own calorie total, when Google provides one.
+            var summaryKcal: Double? { exercise.metricsSummary?.caloriesKcal?.value }
+        }
         let windows: [Window] = data.exercises.compactMap { p in
             guard let e = p.exercise, e.interval.endTime > e.interval.startTime else { return nil }
             return Window(syncId: SyncID.make("exercise", p.id), start: e.interval.startTime,
@@ -36,8 +56,8 @@ enum Planner {
         var children: [String: [Record]] = [:]
 
         // 2. Active energy: written once. Samples whose midpoint falls inside a workout
-        //    become that workout's children instead of standalone samples, so workout
-        //    calories are never counted twice.
+        //    are never standalone: they are dropped when the workout has its own calorie
+        //    total (that total is used instead), otherwise they become its children.
         for p in data.activeEnergy {
             guard let e = p.activeEnergyBurned, e.kcal.value > 0, e.interval.endTime >= e.interval.startTime else { continue }
             var r = Record(syncId: SyncID.make("active-energy", p.id),
@@ -45,20 +65,21 @@ enum Planner {
                            payload: .quantity(.activeEnergy, e.kcal.value))
             let mid = e.interval.startTime.addingTimeInterval(e.interval.endTime.timeIntervalSince(e.interval.startTime) / 2)
             if let w = windows.first(where: { mid >= $0.start && mid < $0.end }) {
+                if let kcal = w.summaryKcal, kcal > 0 { continue }
                 r.parentSyncId = w.syncId
                 children[w.syncId, default: []].append(r)
             }
             out.append(r)
         }
 
-        // 3. Workouts, plus summary-based children when no fine-grained data exists.
+        // 3. Workouts, with the summary calories (preferred) or the in-workout samples.
         for w in windows {
             var kids = children[w.syncId] ?? []
             let summary = w.exercise.metricsSummary
 
-            if kids.isEmpty, let kcal = summary?.caloriesKcal?.value, kcal > 0 {
-                // Fallback only: if all-day samples arrive later, this record stops being
-                // produced and is deleted as an orphan, while the workout is rebuilt.
+            if let kcal = w.summaryKcal, kcal > 0 {
+                // Fitbit's per-minute samples undercount workouts, so the workout's own
+                // total wins; the samples inside it were skipped above.
                 let r = Record(syncId: SyncID.make("exercise-kcal", w.pointId), start: w.start, end: w.end,
                                payload: .quantity(.activeEnergy, kcal), parentSyncId: w.syncId)
                 kids.append(r); out.append(r)

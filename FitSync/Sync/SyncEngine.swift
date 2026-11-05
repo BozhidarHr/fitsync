@@ -1,4 +1,7 @@
 import Foundation
+import os
+
+let syncLog = Logger(subsystem: "FitSync", category: "sync")
 
 enum SyncReason: String, Sendable {
     case manual, launch, background
@@ -77,6 +80,16 @@ actor SyncEngine {
         let previous = try await ledger.state(since: min(earliest, since))
         let plan = ChangeDetector.plan(records, ledger: previous)
         report.unchanged = plan.unchangedCount
+
+        syncLog.notice("fetched \(report.fetched.description, privacy: .public), failures \(report.failures.description, privacy: .public)")
+        for p in data.exercises {
+            let kcal = p.exercise?.metricsSummary?.caloriesKcal?.value
+            syncLog.notice("exercise \(p.id, privacy: .public) platform=\(p.dataSource?.platform ?? "nil", privacy: .public) summaryKcal=\(kcal.map { "\($0)" } ?? "nil", privacy: .public)")
+        }
+        syncLog.notice("planned \(records.count) records, \(plan.standalone.count) standalone + \(plan.workouts.count) workouts to write, \(plan.unchangedCount) unchanged")
+        for (w, kids) in plan.workouts {
+            syncLog.notice("workout \(w.syncId, privacy: .public) children: \(kids.map { "\($0.syncId)=\($0.payload.canonical)" }.description, privacy: .public)")
+        }
 
         func stamp(_ r: Record) -> (record: Record, version: Int64) {
             (r, ChangeDetector.nextVersion(previous: previous[r.syncId]?.version, now: now))

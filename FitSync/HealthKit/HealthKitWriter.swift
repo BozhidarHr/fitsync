@@ -52,7 +52,9 @@ final class HealthKitWriter: @unchecked Sendable { // HKHealthStore is thread-sa
         try await builder.addMetadata(metadata)
 
         try await builder.endCollection(at: workout.end)
-        _ = try await builder.finishWorkout()
+        let saved = try await builder.finishWorkout()
+        let kcal = saved?.statistics(for: HKQuantityType(.activeEnergyBurned))?.sumQuantity()?.doubleValue(for: .kilocalorie())
+        syncLog.notice("saved workout \(workout.syncId, privacy: .public): \(samples.count) samples added, HealthKit reports kcal=\(kcal.map { "\($0)" } ?? "nil", privacy: .public)")
     }
 
     // MARK: Deleting

@@ -14,6 +14,7 @@ struct DataPoint: Decodable, Sendable {
     let name: String?
     /// Same resource name, as returned by `reconcile`.
     let dataPointName: String?
+    let dataSource: DataSource?
 
     // Exactly one of these is set (the API's "data" union field).
     let steps: Steps?
@@ -22,10 +23,31 @@ struct DataPoint: Decodable, Sendable {
     let exercise: Exercise?
     let sleep: Sleep?
 
+    struct DataSource: Decodable, Sendable {
+        /// FITBIT, HEALTH_KIT, ...
+        let platform: String?
+    }
+
+    /// Data that Google Health imported from Apple Health. Copying it back would duplicate it.
+    var isFromHealthKit: Bool { dataSource?.platform == "HEALTH_KIT" }
+
     /// Stable id of this point; the basis of every HealthKit sync identifier.
+    /// Derived points (e.g. Fitbit's per-minute active energy) come without a name,
+    /// so they are keyed by source platform + start time instead.
     var id: String {
-        let full = name ?? dataPointName ?? ""
-        return full.split(separator: "/").last.map(String.init) ?? full
+        if let full = name ?? dataPointName, !full.isEmpty {
+            return full.split(separator: "/").last.map(String.init) ?? full
+        }
+        let ms = startTime.map { String(Int64($0.timeIntervalSince1970 * 1000)) } ?? "unknown"
+        return "\((dataSource?.platform ?? "unknown").lowercased())-\(ms)"
+    }
+
+    private var startTime: Date? {
+        steps?.interval.startTime
+            ?? heartRate?.sampleTime.physicalTime
+            ?? activeEnergyBurned?.interval.startTime
+            ?? exercise?.interval.startTime
+            ?? sleep?.interval.startTime
     }
 }
 
