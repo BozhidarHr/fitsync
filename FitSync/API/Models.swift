@@ -18,7 +18,6 @@ struct DataPoint: Decodable, Sendable {
 
     // Exactly one of these is set (the API's "data" union field).
     let steps: Steps?
-    let heartRate: HeartRate?
     let activeEnergyBurned: ActiveEnergyBurned?
     let exercise: Exercise?
     let sleep: Sleep?
@@ -44,7 +43,6 @@ struct DataPoint: Decodable, Sendable {
 
     private var startTime: Date? {
         steps?.interval.startTime
-            ?? heartRate?.sampleTime.physicalTime
             ?? activeEnergyBurned?.interval.startTime
             ?? exercise?.interval.startTime
             ?? sleep?.interval.startTime
@@ -56,18 +54,9 @@ struct APIInterval: Decodable, Sendable {
     let endTime: Date
 }
 
-struct SampleTime: Decodable, Sendable {
-    let physicalTime: Date
-}
-
 struct Steps: Decodable, Sendable {
     let interval: APIInterval
     let count: FlexibleNumber
-}
-
-struct HeartRate: Decodable, Sendable {
-    let sampleTime: SampleTime
-    let beatsPerMinute: FlexibleNumber
 }
 
 struct ActiveEnergyBurned: Decodable, Sendable {

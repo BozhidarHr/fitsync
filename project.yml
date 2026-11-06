@@ -27,12 +27,13 @@ targets:
       path: FitSync/Info.plist
       properties:
         CFBundleDisplayName: FitSync
-        UILaunchScreen: {}
+        UILaunchScreen:
+          UIColorName: LaunchBackground
+          UIImageName: LaunchLogo
+          UIImageRespectsSafeAreaInsets: false
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         NSHealthShareUsageDescription: FitSync reads the samples it wrote so it can update or remove them without creating duplicates.
-        NSHealthUpdateUsageDescription: FitSync writes your Fitbit workouts, active energy, steps, heart rate and sleep from Google Health into Apple Health.
-        UIBackgroundModes: [fetch]
-        BGTaskSchedulerPermittedIdentifiers: [$(APP_BUNDLE_ID).refresh]
+        NSHealthUpdateUsageDescription: FitSync writes your Fitbit workout calories and distance, active energy, steps and sleep from Google Health into Apple Health.
         GoogleClientID: $(GOOGLE_CLIENT_ID)
         GoogleRedirectScheme: $(GOOGLE_REDIRECT_SCHEME)
   FitSyncTests:

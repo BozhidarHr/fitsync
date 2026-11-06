@@ -2,7 +2,8 @@
 
 Personal iOS app that copies Fitbit data from the **Google Health API** into **Apple Health**, one way, without ever duplicating anything.
 
-Synced in v1: workouts (with active calories attached so they count toward the Move ring), all-day active energy, steps, heart rate, sleep stages.
+Synced: workout calories and distance (as plain samples over the workout, so they count toward the Move ring), all-day active energy, steps, sleep stages.
+Not synced: the workouts themselves and heart rate. Google Health's own Apple Health sharing writes those; FitSync only adds the workout data that sharing leaves out.
 
 ## Setup (about 20 minutes)
 
@@ -21,7 +22,7 @@ Synced in v1: workouts (with active calories attached so they count toward the M
    open FitSync.xcodeproj
    ```
 4. Select your iPhone, set your team under *Signing & Capabilities* if needed, and Run. Run the tests with ⌘U.
-5. In the **Google Health app**, turn off Apple Health sharing for workouts, activity, heart rate and sleep. Otherwise Apple Health shows each workout twice (it merges duplicate step/calorie totals by source priority, but not workouts).
+5. In the **Google Health app**, keep Apple Health sharing **on** for workouts and heart rate, and turn it **off** for activity and sleep (FitSync writes those).
 
 A free Apple ID works, but the app must be re-installed from Xcode every 7 days. A paid developer account removes that.
 To automate it, pair the iPhone with "Connect via network" in Xcode and run `scripts/auto-resign.sh install`: a launchd agent checks every 4 hours and rebuilds and reinstalls over Wi-Fi once a day (log: `~/Library/Logs/FitSync-resign.log`).
@@ -32,10 +33,11 @@ To automate it, pair the iPhone with "Connect via network" in Xcode and run `scr
 | --- | --- |
 | HealthKit sync identifiers | Every object carries `HKMetadataKeySyncIdentifier = gh:<type>:<google point id>` and `HKMetadataKeySyncVersion` (epoch ms). Saving the same id again **replaces** the old object. This alone guarantees no duplicates, even after a reinstall. |
 | Ledger (SwiftData) | Remembers a SHA-256 of each record written; unchanged records are skipped, so repeat syncs write nothing. |
-| One `SyncEngine` actor | Button, app launch and background refresh all call `engine.sync()`. A second call while a sync runs joins it instead of starting another. |
+| One `SyncEngine` actor | Syncing is manual only (the Sync button; no launch or background syncs). A second tap while a sync runs joins it instead of starting another. |
 | Orphan cleanup | After a fully successful fetch, FitSync deletes its own samples in the window whose id Google no longer returns (deleted or replaced in Google Health). Never touches other apps' data. |
-| Calories counted once | A workout gets its own summary calories (`caloriesKcal`) and the per-minute active-energy samples inside it are skipped. Only when a workout has no summary calories are those samples attached to it instead. |
-| Apple Health data skipped | Points that Google Health imported from Apple Health (`dataSource.platform = HEALTH_KIT`) are ignored, so iPhone data and FitSync's own workouts are never copied back. |
+| Calories counted once | A workout's summary calories (`caloriesKcal`) are written over its time span and the per-minute active-energy samples inside it are skipped. Only when a workout has no summary calories are those samples kept instead. |
+| No double workouts | FitSync writes no workouts or heart rate (Google Health shares them). A one-time cleanup deletes those (and resting energy) written by older FitSync versions, only from FitSync itself. |
+| Apple Health data skipped | Points that Google Health imported from Apple Health (`dataSource.platform = HEALTH_KIT`) are ignored, so iPhone data and the workouts Google Health shared are never copied back. |
 
 The planning and dedup logic is pure Swift and covered by `FitSyncTests/DedupTests.swift`.
 
@@ -43,7 +45,7 @@ The planning and dedup logic is pure Swift and covered by `FitSyncTests/DedupTes
 
 ```
 FitSync/
-  App/        FitSyncApp (triggers), AppModel (UI state), BackgroundSync
+  App/        FitSyncApp, AppModel (UI state, Sync button)
   Auth/       GoogleAuth (OAuth + PKCE, token refresh), Keychain
   API/        GoogleHealthClient (paging, retries), Models
   Sync/       Planner (Google → records), ChangeDetector, Ledger, SyncEngine

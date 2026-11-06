@@ -7,7 +7,6 @@ struct Record: Sendable, Equatable {
     enum Quantity: String, Sendable {
         case activeEnergy      // kcal
         case steps             // count
-        case heartRate         // count/min
         case distanceWalkingRunning // m
         case distanceCycling   // m
     }

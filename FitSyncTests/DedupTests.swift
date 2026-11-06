@@ -40,7 +40,7 @@ final class DedupTests: XCTestCase {
         ]
         let first = Planner.plan(data)
         let firstPlan = ChangeDetector.plan(first, ledger: [:])
-        XCTAssertEqual(firstPlan.workouts.count, 1)
+        XCTAssertEqual(firstPlan.standalone.count, 3)
 
         let second = Planner.plan(data)
         XCTAssertEqual(first, second, "Planning is deterministic")
@@ -60,23 +60,22 @@ final class DedupTests: XCTestCase {
         let records = Planner.plan(data)
         let plan = ChangeDetector.plan(records, ledger: [:])
 
-        XCTAssertEqual(plan.standalone.map(\.syncId), ["gh:active-energy:outside"])
         // The in-workout sample is dropped, so the workout's calories count once.
-        XCTAssertFalse(records.contains { $0.syncId == "gh:active-energy:inside" })
-        let children = plan.workouts.first!.children
-        XCTAssertEqual(children.map(\.syncId).filter { $0.contains("kcal") || $0.contains("energy") },
-                       ["gh:exercise-kcal:run1"])
-        XCTAssertEqual(children.first { $0.syncId == "gh:exercise-kcal:run1" }?.payload, .quantity(.activeEnergy, 300))
+        XCTAssertEqual(plan.standalone.map(\.syncId),
+                       ["gh:active-energy:outside", "gh:exercise-kcal:run1", "gh:exercise-distance:run1"])
+        XCTAssertEqual(records.first { $0.syncId == "gh:exercise-kcal:run1" }?.payload, .quantity(.activeEnergy, 300))
+        // Google Health's own sharing writes the workout itself.
+        XCTAssertFalse(records.contains(where: \.isWorkout))
+        XCTAssertTrue(plan.workouts.isEmpty)
     }
 
-    func testSamplesAttachedWhenWorkoutHasNoSummaryCalories() {
+    func testSamplesKeptWhenWorkoutHasNoSummaryCalories() {
         var data = FetchedData()
         data.exercises = [exercise("run1", "2026-11-05T07:00:00Z", "2026-11-05T07:30:00Z", kcal: nil)]
         data.activeEnergy = [energy("inside", "2026-11-05T07:10:00Z", "2026-11-05T07:11:00Z", 12)]
         let plan = ChangeDetector.plan(Planner.plan(data), ledger: [:])
 
-        XCTAssertTrue(plan.standalone.isEmpty)
-        XCTAssertTrue(plan.workouts.first!.children.map(\.syncId).contains("gh:active-energy:inside"))
+        XCTAssertEqual(plan.standalone.map(\.syncId), ["gh:active-energy:inside", "gh:exercise-distance:run1"])
     }
 
     func testUnnamedPointsGetDistinctStableIds() {
@@ -104,7 +103,7 @@ final class DedupTests: XCTestCase {
         let records = Planner.plan(data)
         let kcal = records.first { $0.syncId == "gh:exercise-kcal:run1" }
         XCTAssertEqual(kcal?.payload, .quantity(.activeEnergy, 300))
-        XCTAssertEqual(kcal?.parentSyncId, "gh:exercise:run1")
+        XCTAssertNil(kcal?.parentSyncId)
     }
 
     func testEditedValueIsRewrittenNotDuplicated() {

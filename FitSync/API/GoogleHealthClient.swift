@@ -17,7 +17,6 @@ enum GHDataType: String, CaseIterable, Sendable {
     case exercise
     case activeEnergyBurned = "active-energy-burned"
     case steps
-    case heartRate = "heart-rate"
     case sleep
 
     /// AIP-160 filter selecting points that start (sleep: end) inside the window.
@@ -32,8 +31,6 @@ enum GHDataType: String, CaseIterable, Sendable {
             return "active_energy_burned.interval.start_time >= \"\(ts)\""
         case .steps:
             return "steps.interval.start_time >= \"\(ts)\""
-        case .heartRate:
-            return "heart_rate.sample_time.physical_time >= \"\(ts)\""
         case .sleep:
             return "sleep.interval.end_time >= \"\(ts)\""
         }

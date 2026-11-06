@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 
 /// Everything fetched from Google for one sync window.
@@ -6,7 +5,6 @@ struct FetchedData: Sendable {
     var exercises: [DataPoint] = []
     var activeEnergy: [DataPoint] = []
     var steps: [DataPoint] = []
-    var heartRate: [DataPoint] = []
     var sleep: [DataPoint] = []
 
     mutating func set(_ type: GHDataType, _ points: [DataPoint]) {
@@ -14,7 +12,6 @@ struct FetchedData: Sendable {
         case .exercise: exercises = points
         case .activeEnergyBurned: activeEnergy = points
         case .steps: steps = points
-        case .heartRate: heartRate = points
         case .sleep: sleep = points
         }
     }
@@ -24,7 +21,6 @@ struct FetchedData: Sendable {
         case .exercise: return exercises
         case .activeEnergyBurned: return activeEnergy
         case .steps: return steps
-        case .heartRate: return heartRate
         case .sleep: return sleep
         }
     }
@@ -35,81 +31,59 @@ struct FetchedData: Sendable {
 enum Planner {
     static func plan(_ fetched: FetchedData) -> [Record] {
         // Points Google Health imported from Apple Health are already there (often
-        // including FitSync's own workouts); copying them back would duplicate them.
+        // including Google Health's own shared workouts); copying them back would duplicate them.
         var data = fetched
         for type in GHDataType.allCases {
             data.set(type, fetched.points(type).filter { !$0.isFromHealthKit })
         }
         var out: [Record] = []
 
-        // 1. Workouts define windows that active energy is attached to.
+        // 1. Workouts themselves reach Apple Health through Google Health's own sharing, but
+        //    without their calories and distance. FitSync writes only that data, as plain
+        //    samples over the workout's time span (no HKWorkout, so nothing shows twice).
         struct Window {
-            let syncId: String; let start: Date; let end: Date; let pointId: String; let exercise: Exercise
+            let start: Date; let end: Date; let pointId: String; let exercise: Exercise
             /// The workout's own calorie total, when Google provides one.
             var summaryKcal: Double? { exercise.metricsSummary?.caloriesKcal?.value }
         }
         let windows: [Window] = data.exercises.compactMap { p in
             guard let e = p.exercise, e.interval.endTime > e.interval.startTime else { return nil }
-            return Window(syncId: SyncID.make("exercise", p.id), start: e.interval.startTime,
-                          end: e.interval.endTime, pointId: p.id, exercise: e)
+            return Window(start: e.interval.startTime, end: e.interval.endTime, pointId: p.id, exercise: e)
         }
-        var children: [String: [Record]] = [:]
 
-        // 2. Active energy: written once. Samples whose midpoint falls inside a workout
-        //    are never standalone: they are dropped when the workout has its own calorie
-        //    total (that total is used instead), otherwise they become its children.
+        // 2. Active energy: written once. Samples whose midpoint falls inside a workout with
+        //    its own calorie total are dropped (that total is written instead).
         for p in data.activeEnergy {
             guard let e = p.activeEnergyBurned, e.kcal.value > 0, e.interval.endTime >= e.interval.startTime else { continue }
-            var r = Record(syncId: SyncID.make("active-energy", p.id),
-                           start: e.interval.startTime, end: e.interval.endTime,
-                           payload: .quantity(.activeEnergy, e.kcal.value))
             let mid = e.interval.startTime.addingTimeInterval(e.interval.endTime.timeIntervalSince(e.interval.startTime) / 2)
-            if let w = windows.first(where: { mid >= $0.start && mid < $0.end }) {
-                if let kcal = w.summaryKcal, kcal > 0 { continue }
-                r.parentSyncId = w.syncId
-                children[w.syncId, default: []].append(r)
-            }
-            out.append(r)
+            if let w = windows.first(where: { mid >= $0.start && mid < $0.end }),
+               let kcal = w.summaryKcal, kcal > 0 { continue }
+            out.append(Record(syncId: SyncID.make("active-energy", p.id),
+                              start: e.interval.startTime, end: e.interval.endTime,
+                              payload: .quantity(.activeEnergy, e.kcal.value)))
         }
 
-        // 3. Workouts, with the summary calories (preferred) or the in-workout samples.
+        // 3. Workout data: the summary calories (preferred over Fitbit's per-minute samples,
+        //    which undercount workouts) and the distance.
         for w in windows {
-            var kids = children[w.syncId] ?? []
-            let summary = w.exercise.metricsSummary
-
             if let kcal = w.summaryKcal, kcal > 0 {
-                // Fitbit's per-minute samples undercount workouts, so the workout's own
-                // total wins; the samples inside it were skipped above.
-                let r = Record(syncId: SyncID.make("exercise-kcal", w.pointId), start: w.start, end: w.end,
-                               payload: .quantity(.activeEnergy, kcal), parentSyncId: w.syncId)
-                kids.append(r); out.append(r)
+                out.append(Record(syncId: SyncID.make("exercise-kcal", w.pointId), start: w.start, end: w.end,
+                                  payload: .quantity(.activeEnergy, kcal)))
             }
-            if let mm = summary?.distanceMillimeters?.value, mm > 0,
+            if let mm = w.exercise.metricsSummary?.distanceMillimeters?.value, mm > 0,
                let kind = WorkoutActivity.distanceQuantity(for: w.exercise.exerciseType) {
                 // v1 writes no all-day distance, so workout distance cannot double count.
-                let r = Record(syncId: SyncID.make("exercise-distance", w.pointId), start: w.start, end: w.end,
-                               payload: .quantity(kind, mm / 1000), parentSyncId: w.syncId)
-                kids.append(r); out.append(r)
+                out.append(Record(syncId: SyncID.make("exercise-distance", w.pointId), start: w.start, end: w.end,
+                                  payload: .quantity(kind, mm / 1000)))
             }
-
-            var workout = Record(syncId: w.syncId, start: w.start, end: w.end,
-                                 payload: .workout(activity: w.exercise.exerciseType ?? "OTHER",
-                                                   title: w.exercise.displayName))
-            workout.childrenHash = hashChildren(kids)
-            out.append(workout)
         }
 
-        // 4. Steps and heart rate: one HealthKit sample per Google data point.
+        // 4. Steps: one HealthKit sample per Google data point.
+        //    Heart rate is not synced: Google Health's own Apple Health sharing covers it.
         for p in data.steps {
             guard let s = p.steps, s.count.value > 0, s.interval.endTime >= s.interval.startTime else { continue }
             out.append(Record(syncId: SyncID.make("steps", p.id), start: s.interval.startTime,
                               end: s.interval.endTime, payload: .quantity(.steps, s.count.value)))
-        }
-        for p in data.heartRate {
-            guard let h = p.heartRate, h.beatsPerMinute.value > 0 else { continue }
-            let t = h.sampleTime.physicalTime
-            out.append(Record(syncId: SyncID.make("heart-rate", p.id), start: t, end: t,
-                              payload: .quantity(.heartRate, h.beatsPerMinute.value)))
         }
 
         // 5. Sleep: one category sample per stage, keyed by the stage's start time.
@@ -140,11 +114,6 @@ enum Planner {
         case "REM": return .rem
         default: return .unspecified
         }
-    }
-
-    private static func hashChildren(_ kids: [Record]) -> String {
-        let joined = kids.map(\.contentHash).sorted().joined(separator: ",")
-        return SHA256.hash(data: Data(joined.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 }
 

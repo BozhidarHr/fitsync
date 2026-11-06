@@ -8,20 +8,37 @@ final class HealthKitWriter: @unchecked Sendable { // HKHealthStore is thread-sa
     let store = HKHealthStore()
 
     private static let quantityTypes: [HKQuantityTypeIdentifier] = [
-        .activeEnergyBurned, .stepCount, .heartRate, .distanceWalkingRunning, .distanceCycling,
+        .activeEnergyBurned, .stepCount, .distanceWalkingRunning, .distanceCycling,
     ]
 
-    private var writeTypes: Set<HKSampleType> {
+    /// Types FitSync used to write and no longer does: Google Health's own Apple Health
+    /// sharing writes workouts and heart rate, so FitSync's copies showed twice; resting
+    /// energy was dropped because Google serves none.
+    private static let retiredTypes: [HKSampleType] = [
+        HKObjectType.workoutType(), HKQuantityType(.heartRate), HKQuantityType(.basalEnergyBurned),
+    ]
+
+    var writeTypes: Set<HKSampleType> {
         var set: Set<HKSampleType> = Set(Self.quantityTypes.map { HKQuantityType($0) })
         set.insert(HKCategoryType(.sleepAnalysis))
-        set.insert(HKObjectType.workoutType())
         return set
     }
 
-    func requestAuthorization() async throws {
-        guard HKHealthStore.isHealthDataAvailable() else { return }
-        // Read access lets FitSync find its own samples for updates and deletions.
-        try await store.requestAuthorization(toShare: writeTypes, read: Set(writeTypes.map { $0 as HKObjectType }))
+    /// Read access lets FitSync find its own samples for updates and deletions.
+    var readTypes: Set<HKObjectType> { Set(writeTypes.map { $0 as HKObjectType }) }
+
+    enum Access { case full, notAsked, denied }
+
+    /// `.notAsked` only when iOS will really show the permission sheet for a request;
+    /// otherwise `.denied` if any write access is off (fixable only in Settings).
+    /// Read access can't be checked (HealthKit hides it), so this covers writing only.
+    func access() async -> Access {
+        guard HKHealthStore.isHealthDataAvailable() else { return .full }
+        if (try? await store.statusForAuthorizationRequest(toShare: writeTypes, read: readTypes)) == .shouldRequest {
+            return .notAsked
+        }
+        let statuses = writeTypes.map { store.authorizationStatus(for: $0) }
+        return statuses.allSatisfy { $0 == .sharingAuthorized } ? .full : .denied
     }
 
     // MARK: Writing
@@ -65,7 +82,6 @@ final class HealthKitWriter: @unchecked Sendable { // HKHealthStore is thread-sa
     func deleteOrphans(since: Date, keep: Set<String>) async throws -> Set<String> {
         var types: [HKSampleType] = Self.quantityTypes.map { HKQuantityType($0) }
         types.append(HKCategoryType(.sleepAnalysis))
-        types.append(HKObjectType.workoutType())
 
         var deleted = Set<String>()
         for type in types {
@@ -90,6 +106,23 @@ final class HealthKitWriter: @unchecked Sendable { // HKHealthStore is thread-sa
             }
         }
         return deleted
+    }
+
+    /// Deletes every object of a retired type FitSync ever wrote (any date). Only
+    /// FitSync's own objects match, so Google Health's shared copies are kept.
+    /// Returns how many objects were deleted.
+    func deleteRetiredTypes() async throws -> Int {
+        let mine = HKQuery.predicateForObjects(from: HKSource.default())
+        var count = 0
+        for type in Self.retiredTypes {
+            do {
+                count += try await store.deleteObjects(of: type, predicate: mine)
+            } catch let error as HKError where error.code == .errorAuthorizationDenied
+                                                || error.code == .errorAuthorizationNotDetermined {
+                continue // never allowed to write this type, so nothing of ours to remove
+            }
+        }
+        return count
     }
 
     // MARK: Mapping
@@ -122,7 +155,6 @@ final class HealthKitWriter: @unchecked Sendable { // HKHealthStore is thread-sa
         switch q {
         case .activeEnergy: return (.activeEnergyBurned, .kilocalorie())
         case .steps: return (.stepCount, .count())
-        case .heartRate: return (.heartRate, HKUnit.count().unitDivided(by: .minute()))
         case .distanceWalkingRunning: return (.distanceWalkingRunning, .meter())
         case .distanceCycling: return (.distanceCycling, .meter())
         }

@@ -2,10 +2,6 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>BGTaskSchedulerPermittedIdentifiers</key>
-	<array>
-		<string>$(APP_BUNDLE_ID).refresh</string>
-	</array>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
@@ -31,13 +27,16 @@
 	<key>NSHealthShareUsageDescription</key>
 	<string>FitSync reads the samples it wrote so it can update or remove them without creating duplicates.</string>
 	<key>NSHealthUpdateUsageDescription</key>
-	<string>FitSync writes your Fitbit workouts, active energy, steps, heart rate and sleep from Google Health into Apple Health.</string>
-	<key>UIBackgroundModes</key>
-	<array>
-		<string>fetch</string>
-	</array>
+	<string>FitSync writes your Fitbit workout calories and distance, active energy, steps and sleep from Google Health into Apple Health.</string>
 	<key>UILaunchScreen</key>
-	<dict/>
+	<dict>
+		<key>UIColorName</key>
+		<string>LaunchBackground</string>
+		<key>UIImageName</key>
+		<string>LaunchLogo</string>
+		<key>UIImageRespectsSafeAreaInsets</key>
+		<false/>
+	</dict>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

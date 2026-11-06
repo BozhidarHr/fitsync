@@ -3,12 +3,7 @@ import os
 
 let syncLog = Logger(subsystem: "FitSync", category: "sync")
 
-enum SyncReason: String, Sendable {
-    case manual, launch, background
-}
-
 struct SyncReport: Sendable {
-    let reason: SyncReason
     let startedAt: Date
     var finishedAt = Date()
     var fetched: [String: Int] = [:]
@@ -21,11 +16,12 @@ struct SyncReport: Sendable {
 }
 
 /// The single entry point for every sync. Being an actor, and joining an in-flight sync
-/// instead of starting a second one, means the button, app launch and background refresh
-/// can never run two syncs at the same time (a classic cause of double writes).
+/// instead of starting a second one, means repeated taps on the Sync button can never
+/// run two syncs at the same time (a classic cause of double writes).
 actor SyncEngine {
     static let initialBackfillDays = 30
     private static let ledgerRetentionDays = 120
+    private static let retiredCleanupKey = "retiredTypesCleanupDone.v2" // bump when retiredTypes grows
 
     private let client: GoogleHealthClient
     private let writer: HealthKitWriter
@@ -38,40 +34,61 @@ actor SyncEngine {
         self.ledger = ledger
     }
 
-    /// `progress` receives short status lines ("Fetching heart-rate…") for the UI.
-    func sync(reason: SyncReason, lookbackDays: Int,
+    /// `progress` receives short status lines ("Fetching from Google Health…") for the UI.
+    func sync(lookbackDays: Int,
               progress: @escaping @Sendable (String) -> Void = { _ in }) async throws -> SyncReport {
         if let inFlight { return try await inFlight.value }
-        let task = Task { try await self.perform(reason: reason, lookbackDays: lookbackDays, progress: progress) }
+        let task = Task { try await self.perform(lookbackDays: lookbackDays, progress: progress) }
         inFlight = task
         defer { inFlight = nil }
         return try await task.value
     }
 
-    private func perform(reason: SyncReason, lookbackDays: Int,
+    private func perform(lookbackDays: Int,
                          progress: @Sendable (String) -> Void) async throws -> SyncReport {
         let now = Date()
-        var report = SyncReport(reason: reason, startedAt: now)
+        var report = SyncReport(startedAt: now)
 
-        // Background tasks get ~30 s, so they only cover the last day.
-        let days = reason == .background ? 1 : max(1, lookbackDays)
+        let days = max(1, lookbackDays)
         let since = Calendar.current.startOfDay(for: now.addingTimeInterval(-Double(days) * 86_400))
 
-        // 1. Fetch. Each type is independent; a failure skips deletions for this run.
+        // 1. Fetch all types at once. Each is independent; a failure skips deletions for this run.
+        progress("Fetching from Google Health…")
         var data = FetchedData()
         var firstError: Error?
-        for type in GHDataType.allCases {
-            progress("Fetching \(type.rawValue)…")
-            do {
-                let points = try await client.list(type, since: since)
-                data.set(type, points)
-                report.fetched[type.rawValue] = points.count
-            } catch {
-                firstError = firstError ?? error
-                report.failures.append("\(type.rawValue): \(error.localizedDescription)")
+        let client = self.client
+        await withTaskGroup(of: (GHDataType, Result<[DataPoint], Error>).self) { group in
+            for type in GHDataType.allCases {
+                group.addTask {
+                    do { return (type, .success(try await client.list(type, since: since))) }
+                    catch { return (type, .failure(error)) }
+                }
+            }
+            for await (type, result) in group {
+                switch result {
+                case let .success(points):
+                    data.set(type, points)
+                    report.fetched[type.rawValue] = points.count
+                case let .failure(error):
+                    firstError = firstError ?? error
+                    report.failures.append("\(type.rawValue): \(error.localizedDescription)")
+                }
             }
         }
+        report.failures.sort()
         if report.fetched.isEmpty, let firstError { throw firstError }
+
+        // One-time: remove what FitSync wrote of types it no longer syncs (HealthKitWriter.retiredTypes).
+        if !UserDefaults.standard.bool(forKey: Self.retiredCleanupKey) {
+            progress("Removing data FitSync no longer syncs…")
+            do {
+                let removed = try await writer.deleteRetiredTypes()
+                syncLog.notice("deleted \(removed) objects of retired types")
+                UserDefaults.standard.set(true, forKey: Self.retiredCleanupKey)
+            } catch {
+                syncLog.error("retired cleanup failed, retrying next sync: \(error.localizedDescription, privacy: .public)")
+            }
+        }
 
         // 2. Plan the exact target state and compare with what was written before.
         progress("Comparing with previous syncs…")

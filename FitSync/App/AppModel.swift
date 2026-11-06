@@ -3,7 +3,7 @@ import Observation
 import SwiftData
 
 /// UI-facing state. All syncing is delegated to `SyncEngine`, which guarantees that
-/// only one sync runs at a time no matter how many triggers fire.
+/// only one sync runs at a time. Syncs only start from the Sync button.
 @MainActor
 @Observable
 final class AppModel {
@@ -18,6 +18,9 @@ final class AppModel {
     var syncProgress: String?
     var lastReport: SyncReport?
     var lastError: String?
+    var healthAccess: HealthKitWriter.Access = .full
+    /// Toggling it shows the Apple Health permission sheet (`healthDataAccessRequest` in ContentView).
+    var healthAccessRequest = false
     var lastSyncDate: Date? = UserDefaults.standard.object(forKey: Keys.lastSync) as? Date
 
     var lookbackDays: Int = {
@@ -34,9 +37,6 @@ final class AppModel {
         static let lastSync = "lastSuccessfulSync"
         static let lookback = "lookbackDays"
     }
-
-    /// The launch trigger only syncs when the last sync is older than this.
-    private let staleAfter: TimeInterval = 15 * 60
 
     private init() {
         let container: ModelContainer
@@ -62,8 +62,7 @@ final class AppModel {
         do {
             try await auth.signIn()
             isSignedIn = true
-            try await writer.requestAuthorization()
-            await syncNow()
+            requestHealthAccess()
         } catch {
             lastError = error.localizedDescription
         }
@@ -74,28 +73,24 @@ final class AppModel {
         isSignedIn = false
     }
 
-    func requestHealthAccess() async {
-        do { try await writer.requestAuthorization() } catch { lastError = error.localizedDescription }
+    func requestHealthAccess() {
+        healthAccessRequest.toggle()
     }
 
-    // MARK: Triggers (all go through the same engine)
+    func healthAccessRequestFinished(_ result: Result<Bool, Error>) async {
+        if case let .failure(error) = result { lastError = error.localizedDescription }
+        await refreshHealthAccess()
+    }
+
+    /// Called on launch, after the permission sheet, and when the app comes back to the
+    /// foreground, since access can change in Settings.
+    func refreshHealthAccess() async {
+        healthAccess = await writer.access()
+    }
+
+    // MARK: Syncing (manual only)
 
     func syncNow() async {
-        await run(.manual)
-    }
-
-    func syncIfStale() async {
-        guard isSignedIn else { return }
-        if let last = lastSyncDate, Date().timeIntervalSince(last) < staleAfter { return }
-        await run(.launch)
-    }
-
-    func runBackgroundSync() async {
-        guard isSignedIn else { return }
-        await run(.background)
-    }
-
-    private func run(_ reason: SyncReason) async {
         guard isSignedIn else { return }
         isSyncing = true
         lastError = nil
@@ -104,7 +99,6 @@ final class AppModel {
         let firstRun = lastSyncDate == nil
         do {
             let report = try await engine.sync(
-                reason: reason,
                 lookbackDays: firstRun ? SyncEngine.initialBackfillDays : lookbackDays,
                 progress: { [weak self] text in Task { @MainActor in self?.syncProgress = text } }
             )
